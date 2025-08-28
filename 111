@@ -9,7 +9,6 @@
   //  • Each version (folder) has its own accent color
   //  • TV‑remote: explicit controller (up/down/enter/back) + focus
   //  • Show only video files >= 500 MB; 1‑based index for TorrServer
-  //  • Language selection for dubbing
   // ===============================================
 
   // ---------- constants & helpers ----------
@@ -37,64 +36,6 @@
     if (!qp.has('api_key')) qp.set('api_key', KEY);
     if (!qp.has('language')) qp.set('language', tmdbLang());
     return base + path + (path.includes('?')?'&':'?') + qp.toString();
-  }
-
-  // ---------- Language selection ----------
-  const DUBBING_LANGUAGES = [
-    { id: 'ukrainian', name: 'Українська', keywords: ['укр', 'українська', 'ukr', 'ukrainian', 'дубляж', 'dubbing'] },
-    { id: 'russian', name: 'Русский', keywords: ['рус', 'russian', 'русс', 'лицензия', 'озвучка'] },
-    { id: 'original', name: 'Оригінал', keywords: ['ориг', 'original', 'англ', 'eng', 'english'] }
-  ];
-
-  function getDubbingLanguage() {
-    return Lampa.Storage.get('playua_dubbing') || 'ukrainian';
-  }
-
-  function setDubbingLanguage(lang) {
-    Lampa.Storage.set('playua_dubbing', lang);
-  }
-
-  function filterByLanguage(items, preferredLang) {
-    if (preferredLang === 'original') return items;
-    
-    const langConfig = DUBBING_LANGUAGES.find(l => l.id === preferredLang);
-    if (!langConfig) return items;
-
-    const langKeywords = langConfig.keywords;
-    return items.filter(item => {
-      const title = (item.title || '').toLowerCase();
-      return langKeywords.some(keyword => title.includes(keyword));
-    });
-  }
-
-  function createLanguageSelector(callback) {
-    injectStyles();
-    const dlg = openModal('ВИБІР ОЗВУЧЕННЯ');
-    
-    const $list = $(document.createDocumentFragment());
-    const currentLang = getDubbingLanguage();
-
-    DUBBING_LANGUAGES.forEach(lang => {
-      const isSelected = lang.id === currentLang;
-      const row = $(`
-        <div class="playua-row selector ${isSelected ? 'focus' : ''}" tabindex="0">
-          <div class="playua-title">${lang.name}</div>
-          ${isSelected ? '<div class="playua-size">✓</div>' : ''}
-        </div>
-      `);
-      
-      row.on('hover:enter click keydown', (e) => {
-        if (e.type === 'keydown' && e.key !== 'Enter' && e.keyCode !== 13) return;
-        setDubbingLanguage(lang.id);
-        dlg.close();
-        if (callback) callback(lang.id);
-      });
-      
-      $list.append(row);
-    });
-
-    dlg.setItems($list);
-    return dlg;
   }
 
   // ---------- Jackett base ----------
@@ -393,12 +334,7 @@
 
     let items = await jSearchTorznab(query, SERIES_CATS);
     if(!items.length) items = await jSearchJSON(query, SERIES_CATS, { title:meta.title, orig:meta.orig, is_serial:1 });
-    
-    // Filter by selected language
-    const preferredLang = getDubbingLanguage();
-    items = filterByLanguage(items, preferredLang);
-    
-    if(!items.length) throw new Error('Jackett: немає результатів для обраної мови');
+    if(!items.length) throw new Error('Jackett: немає результатів');
 
     const bySeason = new Map();
     for(const it of items){
@@ -502,103 +438,85 @@
 
     let items = await jSearchTorznab(query, MOVIE_CATS);
     if(!items.length) items = await jSearchJSON(query, MOVIE_CATS, { title:meta.title, orig:meta.orig, year:meta.year, is_serial:0 });
-    
-    // Filter by selected language
-    const preferredLang = getDubbingLanguage();
-    items = filterByLanguage(items, preferredLang);
-    
-    if(!items.length) throw new Error('Jackett: немає результатів для обраної мови');
+    if(!items.length) throw new Error('Jackett: немає результатів');
+
+    const best    = items[0];
+    const addLink = best.dl || best.magnet || best.link;
 
     const base = tsBase();
-    const $list = $(document.createDocumentFragment());
+    let linkParam = addLink;
+    try { const added = await tsAdd(base, addLink, meta.title, meta.poster, meta.full); if (added.hash) linkParam = added.hash; } catch(_){ linkParam = addLink; }
 
-    for(const it of items){
-      let link = it.dl || it.magnet || it.link; let hash = link;
-      try{ const added = await tsAdd(base, link, meta.title, meta.poster, meta.full); if (added.hash) hash = added.hash; }catch(_){ }
-
-      try{
-        const { files } = await tsFiles(base, hash);
-        if(!files.length) continue;
-        const vids = files.filter(x=> looksLikeVideo(x.path) && Number(x.length||0) >= MIN_EP_BYTES);
-        if(!vids.length) continue;
-        const best = vids.reduce((m,x)=> Number(x.length||0) > Number(m.length||0) ? x : m, vids[0]);
-        const size = humanSize(best.length);
-        const row = $(`<div class="playua-row selector" tabindex="0"><div class="playua-thumb" style="background-image:url('${meta.poster||''}')"></div><div><div class="playua-title">${it.title}</div><div class="playua-sub">${it.tracker||''}</div></div><div class="playua-size">${size}</div></div>`);
-        row.on('hover:enter click keydown', (e)=>{ if(e.type==='keydown' && e.key!=='Enter' && e.keyCode!==13) return; tsPlayById(hash, best, meta.title); });
-        $list.append(row);
-      }catch(_){ }
-    }
-
-    if (!$list.children().length) throw new Error('Не знайдено файлів ≥500MB');
-    const dlg = openModal('ОБЕРИ РЕЛІЗ');
-    dlg.setItems($list);
+    noty('Запускаю відтворення…');
+    closeAllPlayUaModals();
+    const baseForStream = tsBaseForStream();
+    const fname = safeName(meta.title||'video') + '.mkv';
+    let url = `${baseForStream}/stream/${encodeURIComponent(fname)}?link=${encodeURIComponent(linkParam)}&index=1&play=1`;
+    const qAuth = tsStreamAuthQuery(); if (qAuth) url += qAuth;
+    if (Lampa?.Player?.play) Lampa.Player.play({ url, title: meta.title||fname, timeline:0 }); else location.href = url;
   }
 
-  // ---------- Plugin registration ----------
-  function init(){
-    if (typeof Lampa === 'undefined' || !Lampa.Storage) return setTimeout(init, 100);
-    Lampa.Storage.set('playua_dubbing', getDubbingLanguage()); // Ensure default
-
-    Lampa.Plugin.add('playua', {
-      component: {
-        template: `
-          <div style="padding:20px;max-width:800px;margin:0 auto">
-            <h1 style="font-size:32px;margin-bottom:20px">PlayUa — налаштування</h1>
-            <div style="margin-bottom:20px">
-              <h2 style="font-size:24px;margin-bottom:10px">Мова озвучення</h2>
-              <div style="display:flex;gap:10px;flex-wrap:wrap">
-                ${DUBBING_LANGUAGES.map(lang => `
-                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer">
-                    <input type="radio" name="dubbing" value="${lang.id}" ${getDubbingLanguage() === lang.id ? 'checked' : ''} 
-                           on-change="Lampa.Storage.set('playua_dubbing', this.value)">
-                    ${lang.name}
-                  </label>
-                `).join('')}
-              </div>
-            </div>
-          </div>
-        `
+  // ---------- Entry points ----------
+  async function runPlay(data){
+    try{
+      if (isSerial(data?.movie)){
+        const meta = getShowPayload(data);
+        await showSeasons(meta);
+      } else {
+        await runMovie(data);
       }
-    });
+    }catch(e){ if(String(e&&e.message)==='skip-movie'||String(e&&e.message)==='skip-serial') return; noty('PlayUa: '+(e.message||e), 4000); }
+  }
 
-    Lampa.Menu.add({
-      title: 'PlayUa',
-      component: 'playua'
-    });
-
-    Lampa.Player.add({
-      name: 'playua',
-      menu: {
-        title: 'PlayUa',
-        icon: 'menu_playua'
-      },
-      search: async function(data){
+  // ---------- Button & mount ----------
+  function injectUAStyles(){
+    if (document.getElementById('playua-ua-style')) return;
+    const css = `
+      .full-start__button.playua-btn{background-image:linear-gradient(180deg,#005BBB 0,#005BBB 49.8%,#FFD500 50.2%,#FFD500 100%)!important;color:#fff!important;border:0!important;outline:0!important;box-shadow:0 2px 8px rgba(0,0,0,.28)!important}
+      .full-start__button.playua-btn.selector.focus,.full-start__button.playua-btn:hover{filter:brightness(1.06) contrast(1.02);transform:translateY(-1px)}
+      .full-start__button.playua-btn svg{color:currentColor}
+    `;
+    const s=document.createElement('style'); s.id='playua-ua-style'; s.textContent=css; document.head.appendChild(s);
+  }
+  function findButtonsBar(root){
+    let bar = root.find('.full-start-new__buttons').eq(0); if (bar && bar.length) return bar;
+    bar = root.find('.full-start__buttons').eq(0); if (bar && bar.length) return bar;
+    bar = root.find('.full-actions').eq(0); if (bar && bar.length) return bar;
+    return root.find('.full-start__right, .full-start').eq(0);
+  }
+  function makeButton(){
+    return $(`
+      <div class="full-start__button selector playua-btn" data-playua-icon="1" tabindex="0" aria-label="PlayUa">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" width="28" height="28" aria-hidden="true"><path d="M20 15l20 10-20 10V15z" fill="currentColor"/></svg>
+        <span>PlayUa</span>
+      </div>`);
+  }
+  function attachButtonOnce(root, ev){
+    const m = ev?.data?.movie; if (!m) return true;
+    const bar = findButtonsBar(root); if (!bar || !bar.length) return false; if (bar.find('[data-playua-icon="1"]').length) return true;
+    const btn = makeButton();
+    const click = ()=>{ runPlay(ev.data); };
+    btn.on('hover:enter', click); btn.on('click', click); btn.on('keydown', (e)=>{ if(e.key==='Enter'||e.keyCode===13) click(); });
+    bar.prepend(btn);
+    try { Lampa.Controller.collectionSet(bar); } catch(_) {}
+    return true;
+  }
+  function mountTVNative(){
+    injectUAStyles();
+    try{
+      Lampa.Listener.follow('full', function(ev){
+        if (ev.type !== 'complite' || !ev.object) return;
+        const root = ev.object.activity.render();
+        if (attachButtonOnce(root, ev)) return;
         try{
-          if (isSerial(data.movie)){
-            const meta = getShowPayload(data);
-            await showSeasons(meta);
-          }else{
-            await runMovie(data);
-          }
-        }catch(e){
-          if (e.message === 'skip-serial' || e.message === 'skip-movie') return;
-          noty('PlayUa: '+e.message, 5000);
-        }
-      }
-    });
-
-    // Add language selector to context menu
-    Lampa.Menu.addContext({
-      title: 'Мова озвучення',
-      click: () => {
-        createLanguageSelector((lang) => {
-          noty(`Мова озвучення встановлена: ${DUBBING_LANGUAGES.find(l => l.id === lang)?.name || lang}`, 3000);
-        });
-      }
-    });
+          const target = root[0] || root;
+          const mo = new MutationObserver(()=>{ if (attachButtonOnce(root, ev)) mo.disconnect(); });
+          mo.observe(target, {childList:true, subtree:true});
+          setTimeout(()=>mo.disconnect(), 8000);
+        }catch(_){ }
+      });
+    }catch(_){ }
   }
 
-  if (typeof Lampa !== 'undefined' && Lampa.Storage) init();
-  else window.addEventListener('lampa', init);
-
+  if(!window.plugin_playua_ready){ window.plugin_playua_ready = true; try{ mountTVNative(); }catch(_){ } }
 })();

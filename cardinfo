@@ -1,0 +1,302 @@
+// Плагин cardinfo.js для Lampac
+// Отображает карточку фильма/сериала в левом верхнем углу
+
+(function() {
+    'use strict';
+
+    // Конфигурация плагина
+    const config = {
+        enabled: true,
+        position: 'top-left', // top-left, top-right, bottom-left, bottom-right
+        autoHide: true,
+        autoHideDelay: 5000,
+        showOnHover: false,
+        maxWidth: '320px',
+        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+        textColor: '#ffffff',
+        border: '1px solid rgba(255, 255, 255, 0.2)',
+        borderRadius: '8px',
+        padding: '12px',
+        zIndex: 10000,
+        animation: 'fadeIn 0.3s ease'
+    };
+
+    // Создаем стили для карточки
+    const style = document.createElement('style');
+    style.textContent = `
+        .lampac-cardinfo {
+            position: fixed;
+            ${config.position.includes('top') ? 'top: 20px;' : 'bottom: 20px;'}
+            ${config.position.includes('left') ? 'left: 20px;' : 'right: 20px;'}
+            max-width: ${config.maxWidth};
+            background: ${config.backgroundColor};
+            color: ${config.textColor};
+            border: ${config.border};
+            border-radius: ${config.borderRadius};
+            padding: ${config.padding};
+            z-index: ${config.zIndex};
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            opacity: 0;
+            transform: translateY(-10px);
+            pointer-events: none;
+        }
+
+        .lampac-cardinfo.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .lampac-cardinfo.hidden {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+
+        .lampac-cardinfo-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .lampac-cardinfo-title {
+            font-size: 16px;
+            font-weight: bold;
+            margin: 0;
+            line-height: 1.3;
+        }
+
+        .lampac-cardinfo-close {
+            background: none;
+            border: none;
+            color: ${config.textColor};
+            cursor: pointer;
+            font-size: 18px;
+            padding: 0;
+            margin-left: 10px;
+        }
+
+        .lampac-cardinfo-content {
+            font-size: 14px;
+            line-height: 1.4;
+        }
+
+        .lampac-cardinfo-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .lampac-cardinfo-meta-item {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .lampac-cardinfo-description {
+            margin-top: 8px;
+            font-size: 13px;
+            opacity: 0.9;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .lampac-cardinfo-poster {
+            width: 60px;
+            height: 90px;
+            border-radius: 4px;
+            margin-right: 12px;
+            object-fit: cover;
+            float: left;
+        }
+
+        .lampac-cardinfo-rating {
+            color: #ffd700;
+            font-weight: bold;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // Создаем элемент карточки
+    const card = document.createElement('div');
+    card.className = 'lampac-cardinfo';
+    card.innerHTML = `
+        <div class="lampac-cardinfo-header">
+            <h3 class="lampac-cardinfo-title"></h3>
+            <button class="lampac-cardinfo-close">&times;</button>
+        </div>
+        <div class="lampac-cardinfo-content">
+            <img class="lampac-cardinfo-poster" src="" alt="">
+            <div class="lampac-cardinfo-meta"></div>
+            <div class="lampac-cardinfo-description"></div>
+        </div>
+    `;
+    document.body.appendChild(card);
+
+    // Элементы карточки
+    const titleEl = card.querySelector('.lampac-cardinfo-title');
+    const posterEl = card.querySelector('.lampac-cardinfo-poster');
+    const metaEl = card.querySelector('.lampac-cardinfo-meta');
+    const descriptionEl = card.querySelector('.lampac-cardinfo-description');
+    const closeBtn = card.querySelector('.lampac-cardinfo-close');
+
+    // Таймер для автоматического скрытия
+    let hideTimeout = null;
+
+    // Функция показа карточки
+    function showCard(data) {
+        if (!config.enabled) return;
+
+        // Заполняем данные
+        titleEl.textContent = data.title || 'Неизвестно';
+        posterEl.src = data.poster || '';
+        posterEl.style.display = data.poster ? 'block' : 'none';
+        
+        // Мета-информация
+        metaEl.innerHTML = '';
+        if (data.year) {
+            const yearEl = document.createElement('span');
+            yearEl.className = 'lampac-cardinfo-meta-item';
+            yearEl.textContent = data.year;
+            metaEl.appendChild(yearEl);
+        }
+
+        if (data.rating) {
+            const ratingEl = document.createElement('span');
+            ratingEl.className = 'lampac-cardinfo-meta-item lampac-cardinfo-rating';
+            ratingEl.textContent = `★ ${data.rating}`;
+            metaEl.appendChild(ratingEl);
+        }
+
+        if (data.type) {
+            const typeEl = document.createElement('span');
+            typeEl.className = 'lampac-cardinfo-meta-item';
+            typeEl.textContent = data.type === 'movie' ? 'Фильм' : 'Сериал';
+            metaEl.appendChild(typeEl);
+        }
+
+        // Описание
+        descriptionEl.textContent = data.description || 'Описание отсутствует';
+
+        // Показываем карточку
+        card.classList.remove('hidden');
+        card.classList.add('visible');
+
+        // Автоматическое скрытие
+        if (config.autoHide) {
+            clearTimeout(hideTimeout);
+            hideTimeout = setTimeout(hideCard, config.autoHideDelay);
+        }
+    }
+
+    // Функция скрытия карточки
+    function hideCard() {
+        card.classList.remove('visible');
+        card.classList.add('hidden');
+    }
+
+    // Обработчики событий
+    closeBtn.addEventListener('click', hideCard);
+
+    if (config.showOnHover) {
+        card.addEventListener('mouseenter', () => {
+            clearTimeout(hideTimeout);
+        });
+
+        card.addEventListener('mouseleave', () => {
+            if (config.autoHide) {
+                hideTimeout = setTimeout(hideCard, config.autoHideDelay);
+            }
+        });
+    }
+
+    // Перехват событий Lampac
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function() {
+        originalPushState.apply(this, arguments);
+        checkAndShowCard();
+    };
+
+    history.replaceState = function() {
+        originalReplaceState.apply(this, arguments);
+        checkAndShowCard();
+    };
+
+    window.addEventListener('popstate', checkAndShowCard);
+
+    // Функция проверки и показа карточки
+    function checkAndShowCard() {
+        const path = window.location.pathname;
+        
+        // Проверяем, находимся ли мы на странице фильма/сериала
+        if (path.includes('/movie/') || path.includes('/tv/')) {
+            const id = path.split('/').pop();
+            const type = path.includes('/movie/') ? 'movie' : 'tv';
+            
+            // Получаем данные из мета-тегов или других элементов страницы
+            const title = document.querySelector('meta[property="og:title"]')?.content ||
+                         document.querySelector('h1')?.textContent ||
+                         'Неизвестно';
+
+            const poster = document.querySelector('meta[property="og:image"]')?.content ||
+                          document.querySelector('img[src*="poster"]')?.src ||
+                          '';
+
+            const year = document.querySelector('.year')?.textContent ||
+                        document.querySelector('[class*="year"]')?.textContent ||
+                        '';
+
+            const rating = document.querySelector('.rating')?.textContent ||
+                          document.querySelector('[class*="rating"]')?.textContent ||
+                          '';
+
+            const description = document.querySelector('meta[property="og:description"]')?.content ||
+                               document.querySelector('.description')?.textContent ||
+                               document.querySelector('[class*="description"]')?.textContent ||
+                               '';
+
+            showCard({
+                title: title,
+                poster: poster,
+                year: year,
+                rating: rating,
+                type: type,
+                description: description
+            });
+        } else {
+            hideCard();
+        }
+    }
+
+    // Инициализация при загрузке
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(checkAndShowCard, 1000); // Ждем загрузки контента
+    });
+
+    // Экспортируем функции для внешнего использования
+    window.LampacCardInfo = {
+        show: showCard,
+        hide: hideCard,
+        config: function(newConfig) {
+            Object.assign(config, newConfig);
+        },
+        isVisible: function() {
+            return card.classList.contains('visible');
+        }
+    };
+
+    console.log('Lampac CardInfo plugin loaded successfully');
+})();
